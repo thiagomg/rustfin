@@ -16,3 +16,5 @@ target
 .idea/
 music/
 data/
+
+.DS_Store

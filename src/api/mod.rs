@@ -16,11 +16,6 @@ pub struct AppState {
     pub server_name: String,
 }
 
-const PUBLIC_PATHS: &[&str] = &[
-    "/System/Info/Public",
-    "/Users/AuthenticateByName",
-];
-
 pub fn create_router(state: AppState) -> Router {
     let state = Arc::new(state);
 
@@ -68,6 +63,8 @@ pub fn create_router(state: AppState) -> Router {
         .route("/items/:item_id/Images/:image_type", axum::routing::get(items::get_image))
         .route("/Items/:item_id/Images/:image_type/:index", axum::routing::get(items::get_image))
         .route("/items/:item_id/Images/:image_type/:index", axum::routing::get(items::get_image))
+        .route("/Items/:item_id/Similar", axum::routing::get(items::get_similar))
+        .route("/items/:item_id/similar", axum::routing::get(items::get_similar))
         .route("/Library/Media/Refresh", axum::routing::post(library::refresh_library))
         .route("/Library/Refresh", axum::routing::post(library::refresh_library))
         .layer(middleware::from_fn_with_state(

@@ -13,14 +13,22 @@ use tokio_util::io::ReaderStream;
 use crate::api::AppState;
 
 #[derive(Deserialize)]
+#[allow(dead_code)]
 pub struct StreamQuery {
-    pub Static: Option<String>,
-    pub DeviceId: Option<String>,
-    pub MediaSourceId: Option<String>,
-    pub Path: Option<String>,
-    pub AudioCodec: Option<String>,
-    pub Container: Option<String>,
-    pub StartTimeTicks: Option<i64>,
+    #[serde(rename = "Static")]
+    pub r#static: Option<String>,
+    #[serde(rename = "DeviceId")]
+    pub device_id: Option<String>,
+    #[serde(rename = "MediaSourceId")]
+    pub media_source_id: Option<String>,
+    #[serde(rename = "Path")]
+    pub path: Option<String>,
+    #[serde(rename = "AudioCodec")]
+    pub audio_codec: Option<String>,
+    #[serde(rename = "Container")]
+    pub container: Option<String>,
+    #[serde(rename = "StartTimeTicks")]
+    pub start_time_ticks: Option<i64>,
 }
 
 pub async fn stream_audio(
@@ -93,7 +101,7 @@ pub async fn universal_audio(
         .map(|s| s.to_string());
 
     let container = query
-        .Container
+        .container
         .as_deref()
         .and_then(|c| c.split(',').next())
         .unwrap_or("");

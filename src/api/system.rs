@@ -1,29 +1,8 @@
 use axum::{Json, extract::State};
-use serde::Serialize;
 use serde_json::json;
 use std::sync::Arc;
 
 use crate::api::AppState;
-
-#[derive(Serialize)]
-pub struct PublicSystemInfo {
-    pub Id: String,
-    pub ServerName: String,
-    pub Version: String,
-    pub OperatingSystem: String,
-    pub ProductName: String,
-    pub StartUpWizardCompleted: bool,
-}
-
-#[derive(Serialize)]
-pub struct SystemInfo {
-    pub Id: String,
-    pub ServerName: String,
-    pub Version: String,
-    pub OperatingSystem: String,
-    pub ProductName: String,
-    pub StartUpWizardCompleted: bool,
-}
 
 pub async fn public_info() -> Json<serde_json::Value> {
     Json(json!({
@@ -82,7 +61,7 @@ pub async fn report_playback_start(
             .get("PositionTicks")
             .and_then(|v| v.as_i64())
             .unwrap_or(0);
-        let played_percentage = body
+        let _played_percentage = body
             .get("PlayedPercentage")
             .and_then(|v| v.as_f64())
             .unwrap_or(0.0);

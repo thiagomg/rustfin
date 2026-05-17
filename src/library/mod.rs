@@ -22,6 +22,9 @@ impl Library {
             tracing::warn!("Scan error: {e}");
         }
 
+        tracing::info!("Scanner found {} artists, {} albums, {} tracks ({} errors)",
+            result.artists.len(), result.albums.len(), result.tracks.len(), result.errors.len());
+
         // Resolve artist IDs against DB — insert new, keep existing
         let mut artist_map: std::collections::HashMap<String, String> = std::collections::HashMap::new();
         for (scan_id, name) in &result.artists {
@@ -89,6 +92,15 @@ impl Library {
                             error!("Failed to update album image {name}: {e}");
                         }
                     }
+                    if let Err(e) = sqlx::query("UPDATE albums SET year = ? WHERE id = ? AND year IS NULL")
+                        .bind(year)
+                        .bind(&db_id)
+                        .execute(pool)
+                        .await
+                    {
+                        error!("Failed to update album year {name}: {e}");
+                    }
+                    tracing::info!("Updated year for existing album: name={name} year={year:?}");
                     album_map.insert(scan_id.clone(), db_id);
                 }
                 None => {
@@ -105,6 +117,7 @@ impl Library {
                         error!("Failed to insert album {name}: {e}");
                         continue;
                     }
+                    tracing::info!("Inserted new album: name={name} year={year:?}");
                     album_map.insert(scan_id.clone(), new_id);
                 }
             }
@@ -185,19 +198,6 @@ impl Library {
         }
 
         info!("Library scan complete");
-    }
-
-    pub async fn get_item_count(pool: &SqlitePool, item_type: &str) -> i64 {
-        let table = match item_type {
-            "MusicArtist" | "Artist" => "artists",
-            "MusicAlbum" | "Album" => "albums",
-            "Audio" => "tracks",
-            _ => return 0,
-        };
-        sqlx::query_scalar::<_, i64>(&format!("SELECT COUNT(*) FROM {table}"))
-            .fetch_one(pool)
-            .await
-            .unwrap_or(0)
     }
 }
 

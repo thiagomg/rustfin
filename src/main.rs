@@ -7,40 +7,63 @@ mod api;
 mod db;
 mod library;
 
+fn find_project_root() -> PathBuf {
+    let mut dir = std::env::current_exe()
+        .ok()
+        .and_then(|p| p.parent().map(|p| p.to_path_buf()))
+        .unwrap_or_else(|| PathBuf::from("."));
+    for _ in 0..10 {
+        if dir.join("Cargo.toml").exists() {
+            return dir;
+        }
+        if !dir.pop() {
+            break;
+        }
+    }
+    std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."))
+}
+
 #[tokio::main]
 async fn main() {
     tracing_subscriber::fmt()
         .with_env_filter(
             tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| "music_server=debug,tower_http=info".into()),
+                .unwrap_or_else(|_| "rustfin=debug,tower_http=info".into()),
         )
         .init();
 
-    let music_dir = std::env::var("MUSIC_DIR").unwrap_or_else(|_| "./music".to_string());
-    let db_path = std::env::var("DATABASE_URL").unwrap_or_else(|_| "./data/music-server.db".to_string());
+    let project_root = find_project_root();
+
+    let music_dir = std::env::var("MUSIC_DIR")
+        .map(PathBuf::from)
+        .unwrap_or_else(|_| project_root.join("music"));
+    let db_path = std::env::var("DATABASE_URL")
+        .map(PathBuf::from)
+        .unwrap_or_else(|_| project_root.join("data").join("music-server.db"));
     let bind = std::env::var("BIND_ADDRESS").unwrap_or_else(|_| "0.0.0.0:8096".to_string());
     let server_name = std::env::var("SERVER_NAME").unwrap_or_else(|_| "Rust Music Server".to_string());
 
-    info!("Starting music server on {bind}");
-    info!("Music directory: {music_dir}");
-    info!("Database: {db_path}");
+    let music_dir_str = music_dir.to_string_lossy().to_string();
+    let db_path_str = db_path.to_string_lossy().to_string();
 
-    let pool = db::init_pool(&db_path)
+    info!("Starting music server on {bind}");
+    info!("Music directory: {music_dir_str}");
+    info!("Database: {db_path_str}");
+
+    let pool = db::init_pool(&db_path_str)
         .await
         .expect("Failed to initialize database");
 
-    // Scan music library
-    let music_path = PathBuf::from(&music_dir);
-    if music_path.exists() {
-        library::Library::scan_and_import(&pool, &music_path).await;
+    if music_dir.exists() {
+        library::Library::scan_and_import(&pool, &music_dir).await;
     } else {
-        info!("Music directory not found, creating: {music_dir}");
-        tokio::fs::create_dir_all(&music_path).await.ok();
+        info!("Music directory not found, creating: {music_dir_str}");
+        tokio::fs::create_dir_all(&music_dir).await.ok();
     }
 
     let state = AppState {
         db: pool,
-        music_dir,
+        music_dir: music_dir_str,
         server_name,
     };
 

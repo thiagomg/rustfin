@@ -11,3 +11,6 @@ Performance & Features
 9. No graceful shutdown — No signal handling for SIGTERM/SIGINT. Tokio has built-in support via tokio::signal.
 Testing
 10. No tests — No unit or integration tests for auth, scanning, API endpoints, or streaming.
+
+Config: log, users
+transcoding

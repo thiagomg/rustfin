@@ -20,10 +20,13 @@ const PUBLIC_PATHS: &[&str] = &[
 
 #[derive(Deserialize)]
 pub struct LoginRequest {
-    pub Username: String,
+    #[serde(rename = "Username")]
+    pub username: String,
     #[serde(alias = "PW")]
-    pub Pw: Option<String>,
-    pub Password: Option<String>,
+    #[serde(rename = "Pw")]
+    pub pw: Option<String>,
+    #[serde(rename = "Password")]
+    pub password: Option<String>,
 }
 
 pub async fn authenticate_by_name(
@@ -46,20 +49,20 @@ pub async fn authenticate_by_name(
     };
 
     tracing::info!(
-        "Login attempt: username='{}' Pw_present={} Pw_len={} Password_present={} Password_len={}",
-        body.Username,
-        body.Pw.is_some(),
-        body.Pw.as_ref().map(|s| s.len()).unwrap_or(0),
-        body.Password.is_some(),
-        body.Password.as_ref().map(|s| s.len()).unwrap_or(0),
+        "Login attempt: username='{}' pw_present={} pw_len={} password_present={} password_len={}",
+        body.username,
+        body.pw.is_some(),
+        body.pw.as_ref().map(|s| s.len()).unwrap_or(0),
+        body.password.is_some(),
+        body.password.as_ref().map(|s| s.len()).unwrap_or(0),
     );
 
-    tracing::info!("Login attempt: username='{}'", body.Username);
+    tracing::info!("Login attempt: username='{}'", body.username);
 
     let user: Option<(String, String, String)> = match sqlx::query_as(
         "SELECT id, password_hash, password_sha FROM users WHERE username = ?",
     )
-    .bind(&body.Username)
+    .bind(&body.username)
     .fetch_optional(&state.db)
     .await
     {
@@ -76,7 +79,7 @@ pub async fn authenticate_by_name(
     let (user_id, password_hash, password_sha) = match user {
         Some(u) => u,
         None => {
-            tracing::warn!("Login failed: user '{}' not found", body.Username);
+            tracing::warn!("Login failed: user '{}' not found", body.username);
             return Err((
                 StatusCode::UNAUTHORIZED,
                 Json(json!({"Status": "Unauthorized", "Message": "Invalid username or password"})),
@@ -84,7 +87,7 @@ pub async fn authenticate_by_name(
         }
     };
 
-    let password_ok = if let Some(pw) = &body.Pw {
+    let password_ok = if let Some(pw) = &body.pw {
         if !pw.is_empty() {
             if pw.len() == 64 && pw.chars().all(|c| c.is_ascii_hexdigit()) {
                 pw.eq_ignore_ascii_case(&password_sha)
@@ -94,7 +97,7 @@ pub async fn authenticate_by_name(
         } else {
             false
         }
-    } else if let Some(password) = &body.Password {
+    } else if let Some(password) = &body.password {
         if !password.is_empty() {
             bcrypt::verify(password, &password_hash).unwrap_or(false)
         } else {
@@ -105,14 +108,14 @@ pub async fn authenticate_by_name(
     };
 
     if !password_ok {
-        tracing::warn!("Login failed: wrong password for '{}'", body.Username);
+        tracing::warn!("Login failed: wrong password for '{}'", body.username);
         return Err((
             StatusCode::UNAUTHORIZED,
             Json(json!({"Status": "Unauthorized", "Message": "Invalid username or password"})),
         ));
     }
 
-    tracing::info!("Login successful: user='{}'", body.Username);
+    tracing::info!("Login successful: user='{}'", body.username);
 
     let access_token = Uuid::new_v4().to_string();
     let session_id = Uuid::new_v4().to_string();
@@ -151,7 +154,7 @@ pub async fn authenticate_by_name(
     Ok(Json(json!({
         "User": {
             "Id": user_id,
-            "Name": body.Username,
+            "Name": body.username,
             "ServerId": "music-server-1",
             "HasPassword": true,
             "Configuration": {},
@@ -180,7 +183,7 @@ pub async fn authenticate_by_name(
         "SessionInfo": {
             "Id": session_id,
             "UserId": user_id,
-            "UserName": body.Username,
+            "UserName": body.username,
             "Client": client,
             "DeviceName": device,
             "DeviceId": device_id,
@@ -263,7 +266,7 @@ pub async fn auth_middleware(
             }
         };
 
-    let (_session_id, user_id) = match session {
+    let (_session_id, _user_id) = match session {
         Some(s) => {
             tracing::debug!("Auth valid: user={}", s.1);
             s
@@ -367,9 +370,4 @@ fn urlencoding_decode(s: &str) -> Option<String> {
         }
     }
     Some(result)
-}
-
-#[derive(Clone)]
-pub struct AuthUser {
-    pub id: String,
 }

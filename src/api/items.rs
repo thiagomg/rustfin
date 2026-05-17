@@ -15,21 +15,42 @@ use uuid::Uuid;
 use crate::api::AppState;
 
 #[derive(Deserialize, Default)]
+#[allow(dead_code)]
 pub struct ItemsQuery {
-    pub ParentId: Option<String>,
-    pub IncludeItemTypes: Option<String>,
-    pub Recursive: Option<String>,
-    pub StartIndex: Option<i32>,
-    pub Limit: Option<i32>,
-    pub SortBy: Option<String>,
-    pub SortOrder: Option<String>,
-    pub Fields: Option<String>,
-    pub Filters: Option<String>,
-    pub SearchTerm: Option<String>,
-    pub IsFavorite: Option<String>,
-    pub MediaTypes: Option<String>,
-    pub UserId: Option<String>,
-    pub Ids: Option<String>,
+    #[serde(rename = "ParentId")]
+    pub parent_id: Option<String>,
+    #[serde(rename = "IncludeItemTypes")]
+    pub include_item_types: Option<String>,
+    #[serde(rename = "Recursive")]
+    pub recursive: Option<String>,
+    #[serde(rename = "StartIndex")]
+    pub start_index: Option<i32>,
+    #[serde(rename = "Limit")]
+    pub limit: Option<i32>,
+    #[serde(rename = "SortBy")]
+    pub sort_by: Option<String>,
+    #[serde(rename = "SortOrder")]
+    pub sort_order: Option<String>,
+    #[serde(rename = "Fields")]
+    pub fields: Option<String>,
+    #[serde(rename = "Filters")]
+    pub filters: Option<String>,
+    #[serde(rename = "SearchTerm")]
+    pub search_term: Option<String>,
+    #[serde(rename = "IsFavorite")]
+    pub is_favorite: Option<String>,
+    #[serde(rename = "MediaTypes")]
+    pub media_types: Option<String>,
+    #[serde(rename = "UserId")]
+    pub user_id: Option<String>,
+    #[serde(rename = "Ids")]
+    pub ids: Option<String>,
+    #[serde(rename = "ArtistIds")]
+    pub artist_ids: Option<String>,
+    #[serde(rename = "AlbumId")]
+    pub album_id: Option<String>,
+    #[serde(rename = "AlbumIds")]
+    pub album_ids: Option<String>,
 }
 
 const TICKS_PER_SECOND: i64 = 10_000_000;
@@ -64,7 +85,7 @@ pub async fn get_items(
     Query(query): Query<ItemsQuery>,
 ) -> Json<serde_json::Value> {
     let item_types = query
-        .IncludeItemTypes
+        .include_item_types
         .as_deref()
         .unwrap_or("")
         .split(',')
@@ -72,11 +93,47 @@ pub async fn get_items(
         .filter(|s| !s.is_empty())
         .collect::<Vec<_>>();
 
-    let parent_id = query.ParentId.as_deref().unwrap_or("");
-    let start_index = query.StartIndex.unwrap_or(0).max(0);
-    let limit = query.Limit.unwrap_or(100).max(1).min(200);
+    let parent_id = query.parent_id.as_deref().unwrap_or("");
+    let artist_ids = query.artist_ids.as_deref().unwrap_or("");
+    let album_id = query.album_id.as_deref().unwrap_or("");
+    let album_ids = query.album_ids.as_deref().unwrap_or("");
+    let start_index = query.start_index.unwrap_or(0).max(0);
+    let limit = query.limit.unwrap_or(100).max(1).min(200);
 
-    tracing::info!("GetItems: types={item_types:?} parent={parent_id} offset={start_index} limit={limit}");
+    tracing::info!("GetItems: types={item_types:?} parent={parent_id} artist_ids={artist_ids} album_id={album_id} album_ids={album_ids} offset={start_index} limit={limit}");
+
+    // If AlbumId or AlbumIds is specified, list tracks for that album
+    let target_album_id = if !album_id.is_empty() {
+        album_id
+    } else if !album_ids.is_empty() {
+        album_ids.split(',').next().unwrap_or("").trim()
+    } else {
+        ""
+    };
+
+    if !target_album_id.is_empty() {
+        return list_tracks_for_album(&state, target_album_id, start_index, limit).await;
+    }
+
+    // If ArtistIds is specified, list albums for that artist
+    if !artist_ids.is_empty() {
+        let first_artist_id = artist_ids.split(',').next().unwrap_or("").trim();
+        if !first_artist_id.is_empty() {
+            let artist_count: i64 = sqlx::query_scalar(
+                "SELECT COUNT(*) FROM artists WHERE id = ?",
+            )
+            .bind(first_artist_id)
+            .fetch_one(&state.db)
+            .await
+            .unwrap_or(0);
+
+            tracing::info!("ArtistIds lookup: artist_id={first_artist_id} exists={artist_count}");
+
+            if artist_count > 0 {
+                return list_albums_for_artist(&state, first_artist_id, start_index, limit).await;
+            }
+        }
+    }
 
     // If parent_id is specified and valid (not the magic "music-library"), resolve it first
     if !parent_id.is_empty() && parent_id != "music-library" && parent_id != "null" {
@@ -144,8 +201,8 @@ async fn list_artists(
         .await
         .unwrap_or(0);
 
-    let rows: Vec<(String, String)> = sqlx::query_as(
-        "SELECT id, name FROM artists ORDER BY sort_name ASC LIMIT ? OFFSET ?",
+    let rows: Vec<(String, String, i64)> = sqlx::query_as(
+        "SELECT a.id, a.name, COALESCE(alb.cnt, 0) FROM artists a LEFT JOIN (SELECT artist_id, COUNT(*) as cnt FROM albums GROUP BY artist_id) alb ON alb.artist_id = a.id ORDER BY a.sort_name ASC LIMIT ? OFFSET ?",
     )
     .bind(limit)
     .bind(start_index)
@@ -155,7 +212,7 @@ async fn list_artists(
 
     let items: Vec<serde_json::Value> = rows
         .into_iter()
-        .map(|(id, name)| json_artist_item(&id, &name))
+        .map(|(id, name, album_count)| json_artist_item(&id, &name, album_count))
         .collect();
 
     Json(json!({
@@ -175,8 +232,8 @@ async fn list_albums(
         .await
         .unwrap_or(0);
 
-    let rows: Vec<(String, String, String, String, Option<i32>, Option<String>)> = sqlx::query_as(
-        "SELECT a.id, a.name, a.artist_id, COALESCE(ar.name, ''), a.year, a.image_path FROM albums a LEFT JOIN artists ar ON ar.id = a.artist_id ORDER BY a.year DESC, a.name ASC LIMIT ? OFFSET ?",
+    let rows: Vec<(String, String, String, String, Option<i32>, Option<String>, i64)> = sqlx::query_as(
+        "SELECT a.id, a.name, a.artist_id, COALESCE(ar.name, ''), a.year, a.image_path, COALESCE((SELECT COUNT(*) FROM tracks WHERE album_id = a.id), 0) FROM albums a LEFT JOIN artists ar ON ar.id = a.artist_id ORDER BY a.year DESC, a.name ASC LIMIT ? OFFSET ?",
     )
     .bind(limit)
     .bind(start_index)
@@ -186,7 +243,7 @@ async fn list_albums(
 
     let items: Vec<serde_json::Value> = rows
         .into_iter()
-        .map(|(id, name, artist_id, artist_name, year, image_path)| json_album_item(&id, &name, &artist_id, &artist_name, year, image_path.as_deref()))
+        .map(|(id, name, artist_id, artist_name, year, image_path, song_count)| json_album_item(&id, &name, &artist_id, &artist_name, year, image_path.as_deref(), song_count))
         .collect();
 
     Json(json!({
@@ -210,8 +267,10 @@ async fn list_albums_for_artist(
     .await
     .unwrap_or(0);
 
-    let rows: Vec<(String, String, String, String, Option<i32>, Option<String>)> = sqlx::query_as(
-        "SELECT a.id, a.name, a.artist_id, COALESCE(ar.name, ''), a.year, a.image_path FROM albums a LEFT JOIN artists ar ON ar.id = a.artist_id WHERE a.artist_id = ? ORDER BY a.year DESC, a.name ASC LIMIT ? OFFSET ?",
+    tracing::info!("list_albums_for_artist: artist_id={artist_id} total={total} limit={limit} offset={start_index}");
+
+    let rows: Vec<(String, String, String, String, Option<i32>, Option<String>, i64)> = sqlx::query_as(
+        "SELECT a.id, a.name, a.artist_id, COALESCE(ar.name, ''), a.year, a.image_path, COALESCE((SELECT COUNT(*) FROM tracks WHERE album_id = a.id), 0) FROM albums a LEFT JOIN artists ar ON ar.id = a.artist_id WHERE a.artist_id = ? ORDER BY a.year DESC, a.name ASC LIMIT ? OFFSET ?",
     )
     .bind(artist_id)
     .bind(limit)
@@ -222,7 +281,7 @@ async fn list_albums_for_artist(
 
     let items: Vec<serde_json::Value> = rows
         .into_iter()
-        .map(|(id, name, art_id, artist_name, year, image_path)| json_album_item(&id, &name, &art_id, &artist_name, year, image_path.as_deref()))
+        .map(|(id, name, art_id, artist_name, year, image_path, song_count)| json_album_item(&id, &name, &art_id, &artist_name, year, image_path.as_deref(), song_count))
         .collect();
 
     Json(json!({
@@ -324,27 +383,27 @@ pub async fn get_item(
         }
     }
 
-    if let Ok(row) = sqlx::query_as::<_, (String, String, String, String, Option<i32>, Option<String>)>(
-        "SELECT a.id, a.name, a.artist_id, COALESCE(ar.name, ''), a.year, a.image_path FROM albums a LEFT JOIN artists ar ON ar.id = a.artist_id WHERE a.id = ?",
+    if let Ok(row) = sqlx::query_as::<_, (String, String, String, String, Option<i32>, Option<String>, i64)>(
+        "SELECT a.id, a.name, a.artist_id, COALESCE(ar.name, ''), a.year, a.image_path, COALESCE((SELECT COUNT(*) FROM tracks WHERE album_id = a.id), 0) FROM albums a LEFT JOIN artists ar ON ar.id = a.artist_id WHERE a.id = ?",
     )
     .bind(item_id)
     .fetch_optional(&state.db)
     .await
     {
-        if let Some((id, name, artist_id, artist_name, year, image_path)) = row {
-            return Json(json_album_item(&id, &name, &artist_id, &artist_name, year, image_path.as_deref()));
+        if let Some((id, name, artist_id, artist_name, year, image_path, song_count)) = row {
+            return Json(json_album_item(&id, &name, &artist_id, &artist_name, year, image_path.as_deref(), song_count));
         }
     }
 
-    if let Ok(row) = sqlx::query_as::<_, (String, String)>(
-        "SELECT a.id, a.name FROM artists a WHERE a.id = ?",
+    if let Ok(row) = sqlx::query_as::<_, (String, String, i64)>(
+        "SELECT a.id, a.name, COALESCE((SELECT COUNT(*) FROM albums WHERE artist_id = a.id), 0) FROM artists a WHERE a.id = ?",
     )
     .bind(item_id)
     .fetch_optional(&state.db)
     .await
     {
-        if let Some((id, name)) = row {
-            return Json(json_artist_item(&id, &name));
+        if let Some((id, name, album_count)) = row {
+            return Json(json_artist_item(&id, &name, album_count));
         }
     }
 
@@ -359,17 +418,18 @@ pub async fn get_artists(
     State(state): State<Arc<AppState>>,
     Query(query): Query<ItemsQuery>,
 ) -> Json<serde_json::Value> {
-    let start_index = query.StartIndex.unwrap_or(0).max(0);
-    tracing::info!("List artists: offset={start_index}");
-    let limit = query.Limit.unwrap_or(100).max(1).min(200);
+    let start_index = query.start_index.unwrap_or(0).max(0);
+    let limit = query.limit.unwrap_or(100).max(1).min(200);
 
     let total: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM artists")
         .fetch_one(&state.db)
         .await
         .unwrap_or(0);
 
-    let rows: Vec<(String, String)> = sqlx::query_as(
-        "SELECT id, name FROM artists ORDER BY sort_name ASC LIMIT ? OFFSET ?",
+    tracing::info!("List artists: total={total} offset={start_index} limit={limit}");
+
+    let rows: Vec<(String, String, i64)> = sqlx::query_as(
+        "SELECT a.id, a.name, COALESCE(alb.cnt, 0) FROM artists a LEFT JOIN (SELECT artist_id, COUNT(*) as cnt FROM albums GROUP BY artist_id) alb ON alb.artist_id = a.id ORDER BY a.sort_name ASC LIMIT ? OFFSET ?",
     )
     .bind(limit)
     .bind(start_index)
@@ -379,7 +439,7 @@ pub async fn get_artists(
 
     let items: Vec<serde_json::Value> = rows
         .into_iter()
-        .map(|(id, name)| json_artist_item(&id, &name))
+        .map(|(id, name, album_count)| json_artist_item(&id, &name, album_count))
         .collect();
 
     Json(json!({
@@ -401,8 +461,8 @@ pub async fn get_artist(
     Path(artist_id): Path<String>,
 ) -> Json<serde_json::Value> {
     tracing::info!("Get artist: {artist_id}");
-    let row: Option<(String, String)> = sqlx::query_as(
-        "SELECT id, name FROM artists WHERE id = ?",
+    let row: Option<(String, String, i64)> = sqlx::query_as(
+        "SELECT a.id, a.name, COALESCE((SELECT COUNT(*) FROM albums WHERE artist_id = a.id), 0) FROM artists a WHERE a.id = ?",
     )
     .bind(&artist_id)
     .fetch_optional(&state.db)
@@ -410,7 +470,7 @@ pub async fn get_artist(
     .unwrap_or(None);
 
     match row {
-        Some((id, name)) => Json(json_artist_item(&id, &name)),
+        Some((id, name, album_count)) => Json(json_artist_item(&id, &name, album_count)),
         None => Json(json!({"Id": artist_id, "Name": "Unknown", "Type": "MusicArtist"})),
     }
 }
@@ -419,9 +479,9 @@ pub async fn get_resume_items(
     State(state): State<Arc<AppState>>,
     Query(query): Query<ItemsQuery>,
 ) -> Json<serde_json::Value> {
-    let user_id = query.UserId.as_deref().unwrap_or("");
-    let start_index = query.StartIndex.unwrap_or(0).max(0);
-    let limit = query.Limit.unwrap_or(100).max(1).min(200);
+    let user_id = query.user_id.as_deref().unwrap_or("");
+    let start_index = query.start_index.unwrap_or(0).max(0);
+    let limit = query.limit.unwrap_or(100).max(1).min(200);
 
     if user_id.is_empty() {
         return Json(json!({"Items": [], "TotalRecordCount": 0, "StartIndex": start_index}));
@@ -462,7 +522,7 @@ pub async fn get_latest_items(
     State(state): State<Arc<AppState>>,
     Query(query): Query<ItemsQuery>,
 ) -> Json<serde_json::Value> {
-    let limit = query.Limit.unwrap_or(20).max(1).min(50);
+    let limit = query.limit.unwrap_or(20).max(1).min(50);
 
     let rows: Vec<(String, String, f64, String, String, String, String, String, Option<i32>, Option<i32>)> = sqlx::query_as(
         "SELECT t.id, t.name, t.duration, t.artist_id, COALESCE(ar.name, ''), t.album_id, COALESCE(al.name, ''), COALESCE(aal.name, ''), t.track_number, t.disc_number FROM tracks t LEFT JOIN artists ar ON ar.id = t.artist_id LEFT JOIN albums al ON al.id = t.album_id LEFT JOIN artists aal ON aal.id = al.artist_id ORDER BY t.created_at DESC LIMIT ?",
@@ -489,7 +549,7 @@ pub async fn get_latest_items(
 pub async fn get_playback_info(
     State(state): State<Arc<AppState>>,
     Path(params): Path<std::collections::HashMap<String, String>>,
-    Query(query): Query<ItemsQuery>,
+    Query(_query): Query<ItemsQuery>,
 ) -> Json<serde_json::Value> {
     let item_id = params.get("item_id").map(|s| s.as_str()).unwrap_or("");
 
@@ -652,8 +712,8 @@ pub async fn get_favorites(
     Path(user_id): Path<String>,
     Query(query): Query<ItemsQuery>,
 ) -> Json<serde_json::Value> {
-    let start_index = query.StartIndex.unwrap_or(0).max(0);
-    let limit = query.Limit.unwrap_or(100).max(1).min(200);
+    let start_index = query.start_index.unwrap_or(0).max(0);
+    let limit = query.limit.unwrap_or(100).max(1).min(200);
 
     let ids: Vec<(String,)> = sqlx::query_as(
         "SELECT item_id FROM user_data WHERE user_id = ? AND is_favorite = 1 LIMIT ? OFFSET ?",
@@ -830,8 +890,8 @@ pub async fn search(
     State(state): State<Arc<AppState>>,
     Query(query): Query<ItemsQuery>,
 ) -> Json<serde_json::Value> {
-    let term = query.SearchTerm.as_deref().unwrap_or("");
-    let limit = query.Limit.unwrap_or(20).max(1).min(100);
+    let term = query.search_term.as_deref().unwrap_or("");
+    let limit = query.limit.unwrap_or(20).max(1).min(100);
 
     if !term.is_empty() {
         tracing::info!("Search: term=\"{term}\" limit={limit}");
@@ -930,34 +990,34 @@ async fn get_item_inner(
         }
     }
 
-    if let Ok(row) = sqlx::query_as::<_, (String, String, String, String, Option<i32>, Option<String>)>(
-        "SELECT a.id, a.name, a.artist_id, COALESCE(ar.name, ''), a.year, a.image_path FROM albums a LEFT JOIN artists ar ON ar.id = a.artist_id WHERE a.id = ?",
+    if let Ok(row) = sqlx::query_as::<_, (String, String, String, String, Option<i32>, Option<String>, i64)>(
+        "SELECT a.id, a.name, a.artist_id, COALESCE(ar.name, ''), a.year, a.image_path, COALESCE((SELECT COUNT(*) FROM tracks WHERE album_id = a.id), 0) FROM albums a LEFT JOIN artists ar ON ar.id = a.artist_id WHERE a.id = ?",
     )
     .bind(item_id)
     .fetch_optional(&state.db)
     .await
     {
-        if let Some((id, name, artist_id, artist_name, year, image_path)) = row {
-            return Some(json_album_item(&id, &name, &artist_id, &artist_name, year, image_path.as_deref()));
+        if let Some((id, name, artist_id, artist_name, year, image_path, song_count)) = row {
+            return Some(json_album_item(&id, &name, &artist_id, &artist_name, year, image_path.as_deref(), song_count));
         }
     }
 
-    if let Ok(row) = sqlx::query_as::<_, (String, String)>(
-        "SELECT a.id, a.name FROM artists a WHERE a.id = ?",
+    if let Ok(row) = sqlx::query_as::<_, (String, String, i64)>(
+        "SELECT a.id, a.name, COALESCE((SELECT COUNT(*) FROM albums WHERE artist_id = a.id), 0) FROM artists a WHERE a.id = ?",
     )
     .bind(item_id)
     .fetch_optional(&state.db)
     .await
     {
-        if let Some((id, name)) = row {
-            return Some(json_artist_item(&id, &name));
+        if let Some((id, name, album_count)) = row {
+            return Some(json_artist_item(&id, &name, album_count));
         }
     }
 
     None
 }
 
-fn json_artist_item(id: &str, name: &str) -> serde_json::Value {
+fn json_artist_item(id: &str, name: &str, album_count: i64) -> serde_json::Value {
     json!({
         "Id": id,
         "Name": name,
@@ -966,10 +1026,11 @@ fn json_artist_item(id: &str, name: &str) -> serde_json::Value {
         "ImageTags": {},
         "BackdropImageTags": [],
         "LocationType": "FileSystem",
+        "AlbumCount": album_count,
     })
 }
 
-fn json_album_item(id: &str, name: &str, artist_id: &str, artist_name: &str, year: Option<i32>, image_path: Option<&str>) -> serde_json::Value {
+fn json_album_item(id: &str, name: &str, artist_id: &str, artist_name: &str, year: Option<i32>, image_path: Option<&str>, song_count: i64) -> serde_json::Value {
     let mut image_tags = serde_json::Map::new();
     if image_path.is_some() {
         image_tags.insert("Primary".into(), serde_json::Value::String(id.to_string()));
@@ -992,6 +1053,8 @@ fn json_album_item(id: &str, name: &str, artist_id: &str, artist_name: &str, yea
         "ParentId": artist_id,
         "LocationType": "FileSystem",
         "RunTimeTicks": 0,
+        "ChildCount": song_count,
+        "SongCount": song_count,
     })
 }
 
@@ -1092,6 +1155,45 @@ fn json_track_item_detailed(
             "BitRate": bitrate.map(|b| b as i32).unwrap_or(320000),
         }],
     })
+}
+
+pub async fn get_similar(
+    State(state): State<Arc<AppState>>,
+    Path(item_id): Path<String>,
+) -> Json<serde_json::Value> {
+    tracing::info!("Get similar items: item_id={item_id}");
+
+    // Find the artist of the given item, then return other items by the same artist
+    let artist_id: Option<String> = sqlx::query_scalar(
+        "SELECT artist_id FROM tracks WHERE id = ? UNION SELECT artist_id FROM albums WHERE id = ?",
+    )
+    .bind(&item_id)
+    .bind(&item_id)
+    .fetch_optional(&state.db)
+    .await
+    .ok()
+    .flatten();
+
+    let mut items = Vec::new();
+    if let Some(aid) = artist_id {
+        let rows: Vec<(String, String, String, String, Option<i32>, Option<String>, i64)> = sqlx::query_as(
+            "SELECT a.id, a.name, a.artist_id, COALESCE(ar.name, ''), a.year, a.image_path, COALESCE((SELECT COUNT(*) FROM tracks WHERE album_id = a.id), 0) FROM albums a LEFT JOIN artists ar ON ar.id = a.artist_id WHERE a.artist_id = ? AND a.id != ? ORDER BY a.year DESC LIMIT 10",
+        )
+        .bind(&aid)
+        .bind(&item_id)
+        .fetch_all(&state.db)
+        .await
+        .unwrap_or_default();
+
+        for (id, name, art_id, artist_name, year, image_path, song_count) in rows {
+            items.push(json_album_item(&id, &name, &art_id, &artist_name, year, image_path.as_deref(), song_count));
+        }
+    }
+
+    Json(json!({
+        "Items": items,
+        "TotalRecordCount": items.len(),
+    }))
 }
 
 pub async fn get_image(

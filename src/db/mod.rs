@@ -1,5 +1,3 @@
-pub mod models;
-
 use sha2::{Digest, Sha256};
 use sqlx::sqlite::SqlitePoolOptions;
 use sqlx::SqlitePool;
@@ -141,7 +139,13 @@ async fn run_migrations(pool: &SqlitePool) -> Result<(), sqlx::Error> {
         .execute(pool)
         .await;
 
-    // Insert default admin user if not exists
+    seed_default_admin(pool).await?;
+
+    info!("Database migrations complete");
+    Ok(())
+}
+
+async fn seed_default_admin(pool: &SqlitePool) -> Result<(), sqlx::Error> {
     let existing: Option<(String,)> =
         sqlx::query_as("SELECT id FROM users WHERE username = 'admin'")
             .fetch_optional(pool)
@@ -161,7 +165,6 @@ async fn run_migrations(pool: &SqlitePool) -> Result<(), sqlx::Error> {
             .await?;
         info!("Created default admin user (password: admin)");
     } else {
-        // Ensure existing admin has password_sha populated
         let empty_sha: Option<(String,)> =
             sqlx::query_as("SELECT id FROM users WHERE username = 'admin' AND (password_sha IS NULL OR password_sha = '')")
                 .fetch_optional(pool)
@@ -177,6 +180,5 @@ async fn run_migrations(pool: &SqlitePool) -> Result<(), sqlx::Error> {
         }
     }
 
-    info!("Database migrations complete");
     Ok(())
 }
