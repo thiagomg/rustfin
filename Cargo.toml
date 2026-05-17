@@ -1,0 +1,25 @@
+[package]
+name = "rustfin"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+axum = { version = "0.7", features = ["macros"] }
+tokio = { version = "1", features = ["full"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+sqlx = { version = "0.8", features = ["runtime-tokio", "sqlite", "chrono", "uuid"] }
+tower-http = { version = "0.5", features = ["cors"] }
+tower = "0.4"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+uuid = { version = "1", features = ["v4", "serde"] }
+tokio-util = { version = "0.7", features = ["io"] }
+chrono = { version = "0.4", features = ["serde"] }
+bcrypt = "0.16"
+lofty = "0.21"
+walkdir = "2"
+mime_guess = "2"
+url = "2"
+sha2 = "0.10"
+hex = "0.4"
