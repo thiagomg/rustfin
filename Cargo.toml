@@ -2,6 +2,8 @@
 name = "rustfin"
 version = "0.1.0"
 edition = "2024"
+license = "Apache-2.0"
+description = "A rust implementation of jellyfin music server"
 
 [dependencies]
 axum = { version = "0.7", features = ["macros"] }

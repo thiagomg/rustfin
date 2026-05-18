@@ -1,3 +1,8 @@
+**Attention:**
+
+This project was created mainly using AI agents. I am doing that as an experiment.
+
+---
 
 1. Remove PUBLIC_PATHS dead constant — it's defined in mod.rs but the auth middleware doesn't reference it (it uses inline path matching). Either remove it or refactor the middleware to use it.
 2. Struct naming conventions — All API struct fields use PascalCase (e.g., pub Username, pub ParentId) which triggers 50+ warnings. Either #[allow(non_snake_case)] on the struct or adopt standard snake_case with #[serde(rename)] for JSON serialization.
